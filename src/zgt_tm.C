@@ -11,7 +11,7 @@
 #include "zgt_tm.h"
 #include "zgt_extern.h"
 
-#define TEAM_NO      19     //insert your team number here
+#define TEAM_NO      6     //insert your team number here
  
 //modified by sharma in oct 2024 to fix handling with end all as last input + a few others
 
@@ -120,23 +120,107 @@ int zgt_tm::TxRead(long tid, long obno, int thrNum)
 int zgt_tm::TxWrite(long tid, long obno, int thrNum)
  {
   //call the write function (writetx); same as above
-
-    // write your code
-    
+   // Packs the arguments into a param structure and creates a thread that runs
+   // writetx(void *). The object number is needed because a write changes one item.
+#ifdef TM_DEBUG
+   printf("\ncreating TxWrite thread for Tx: %ld\n", tid);
+   fflush(stdout);
+#endif
+   // "the required parameters of the function like transaction id, object number etc.
+   // need to be passed in a structure (param in our case)"
+   struct param *nodeinfo = (struct param*)malloc(sizeof(struct param));
+   nodeinfo->tid = tid;
+   nodeinfo->obno = obno;
+   // "The Txtype is initialized to null(' ') in the TxWrite, TxRead, CommitTx, and AbortTx functions."
+   nodeinfo->Txtype = ' ';
+   // "Each operation is assigned its position using count..."                                                                    
+   // "SEQNUM is used to keep track of the order of operations for each Tx." 
+   // writetx waits until condset[tid] equals this count, so the operations of
+   // one Tx run in the order they appear in the input.
+   nodeinfo->count = --SEQNUM[tid];
+   int status;
+   // The handle(function signature) goes into threadid[thrNum] so endTm can join this thread
+   status = pthread_create(&threadid[thrNum],NULL,writetx,(void*)nodeinfo);
+   if (status){
+     // "If there are no threads available, an error should be written in the log."
+     printf("ERROR: return code from pthread_create() is:%d for TxWrite of Tx:%ld\n", status, tid);
+     fflush(stdout);
+     fprintf(this->logfile, "ERROR: return code from pthread_create() is:%d for TxWrite of Tx:%ld\n", status, tid);
+     fflush(this->logfile);
+     exit(-1);
+   }
+   
+#ifdef TM_DEBUG
+   printf("\nexiting TxWrite thread create for Tx: %ld\n", tid);
+   fflush(stdout);
+#endif
    return(0);  // successful operation
  }
 
 int zgt_tm::CommitTx(long tid, int thrNum)
  {
+   //spawn a thread to handle the commit operation for transaction tid
+   // Only needs the transaction ID because committing finalizes the entire transaction
+#ifdef TM_DEBUG
+   printf("\ncreating CommitTx thread for Tx: %ld\n", tid);
+   fflush(stdout);
+#endif
+   struct param *nodeinfo = (struct param*)malloc(sizeof(struct param));
+   nodeinfo->tid = tid;
+   // Commit applies to the whole Tx, not one object, so obno is the invalid value -1
+   nodeinfo->obno = -1;
+   nodeinfo->Txtype = ' ';
+   // Next position in this Tx, so committx can wait (start_operation) for all earlier operations
+   nodeinfo->count = --SEQNUM[tid];
+   int status;
+   status = pthread_create(&threadid[thrNum],NULL,committx,(void*)nodeinfo);
+   if (status){
+     // "If there are no threads available, an error should be written in the log."
+     printf("ERROR: return code from pthread_create() is:%d for CommitTx of Tx:%ld\n", status, tid);
+     fflush(stdout);
+     fprintf(this->logfile, "ERROR: return code from pthread_create() is:%d for CommitTx of Tx:%ld\n", status, tid);
+     fflush(this->logfile);
+     exit(-1);
+   }
    
-    //write your code
+#ifdef TM_DEBUG
+   printf("\nexiting CommitTx thread create for Tx: %ld\n", tid);
+   fflush(stdout);
+#endif
    return(0); //successful operation
 
  }
  
 int zgt_tm::AbortTx(long tid, int thrNum)
- {       
-    //write your code
+ {
+   //spawn a thread to handle the abort operation for transaction tid
+
+#ifdef TM_DEBUG
+   printf("\ncreating AbortTx thread for Tx: %ld\n", tid);
+   fflush(stdout);
+#endif
+   struct param *nodeinfo = (struct param*)malloc(sizeof(struct param));
+   nodeinfo->tid = tid;
+   // Abort applies to the whole Tx, not one object, so obno is the invalid value -1
+   nodeinfo->obno = -1;
+   nodeinfo->Txtype = ' ';
+   // Next position in this Tx, so aborttx can wait (start_operation) for all earlier operations
+   nodeinfo->count = --SEQNUM[tid];
+   int status;
+   status = pthread_create(&threadid[thrNum],NULL,aborttx,(void*)nodeinfo);
+   if (status){
+     // "If there are no threads available, an error should be written in the log."
+     printf("ERROR: return code from pthread_create() is:%d for AbortTx of Tx:%ld\n", status, tid);
+     fflush(stdout);
+     fprintf(this->logfile, "ERROR: return code from pthread_create() is:%d for AbortTx of Tx:%ld\n", status, tid);
+     fflush(this->logfile);
+     exit(-1);
+   }
+
+#ifdef TM_DEBUG
+   printf("\nexiting AbortTx thread create for Tx: %ld\n", tid);
+   fflush(stdout);
+#endif
    return(0);  //successful operation
  }
 

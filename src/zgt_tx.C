@@ -101,19 +101,101 @@ void *begintx(void *arg){
 /* until the lock is released */
 
 void *readtx(void *arg){
-  struct param *node = (struct param*)arg;// get tid and objno and count
+  // "The return types are void*."
 
-  //do the operations for reading. Write YOUR code
-  return(0);
+  // "the required parameters of the function like
+  // transaction id, object number etc. need to be passed in a structure"
+  struct param *node = (struct param*)arg;// get tid and objno and count
+  // "The thread has to make sure that a previous operation by the same transaction
+  // has been completed before starting the current operation"; start_operation
+  // does the cond_wait on condset[tid] for that
+  start_operation(node->tid, node->count);
+
+  // An object number outside objarray would read past the end of the array
+  if ((node->obno < 0) || (node->obno >= MAX_ITEMS)){
+    printf(":::ERROR: ReadTx by Tx:%ld on object:%ld which is out of range (0 to %d)\n",
+        node->tid, node->obno, MAX_ITEMS - 1);
+    fflush(stdout);
+    fprintf(ZGT_Sh->logfile, ":::ERROR: ReadTx by Tx:%ld on object:%ld which is out of range (0 to %d)\n",
+        node->tid, node->obno, MAX_ITEMS - 1);
+    fflush(ZGT_Sh->logfile);
+  }
+  else {
+    // The Tx list is changed by other threads (begintx, commit, abort), so it is
+    // searched while holding the TM semaphore 0; released before set_lock so this
+    // thread never waits for an object while holding it
+    zgt_p(0);
+    zgt_tx *tx = get_tx(node->tid);
+    zgt_v(0);
+
+    if (tx == NULL){
+      // "all errors and the log output need to be printed (or transmitted) at the
+      // point of occurrence"
+      printf(":::ERROR: ReadTx on Tx:%ld which does not exist\n", node->tid);
+      fflush(stdout);
+      fprintf(ZGT_Sh->logfile, ":::ERROR: ReadTx on Tx:%ld which does not exist\n", node->tid);
+      fflush(ZGT_Sh->logfile);
+    }
+    // "...transaction inserts the object into the hash table in the appropriate
+    // lock-mode." S = shared lock for a read; set_lock returns 0 when it is granted
+    else if (tx->set_lock(node->tid, tx->sgno, node->obno, node->count, 'S') == 0){
+      // If this Tx waited for the lock and was aborted, the read
+      // must not be done. tx is still valid here: this Tx's own commit/abort cannot
+      // start until this operation calls finish_operation.
+      if (tx->status != TR_ABORT){
+        tx->perform_readWrite(node->tid, node->obno, 'S');
+      }
+    }
+  }
+
+  // Let the next operation of this Tx proceed (decrements condset[tid] and broadcasts)
+  finish_operation(node->tid);
+  pthread_exit(NULL);
 }
 
 
 void *writetx(void *arg){ //do the operations for writing; similar to readTx
-  struct param *node = (struct param*)arg;	// struct parameter that contains
-  
-  //do the operations for writing; similar to readTx. Write your code
-  return(0);
+  struct param *node = (struct param*)arg;	// struct parameter that contains tid, obno and count
+  //do the operations for writing; similar to readTx.
+  // Wait until the previous operation of this Tx has finished (input order within a Tx)
+  start_operation(node->tid, node->count);
 
+  // An object number outside objarray would write past the end of the array
+  if ((node->obno < 0) || (node->obno >= MAX_ITEMS)){
+    printf(":::ERROR: WriteTx by Tx:%ld on object:%ld which is out of range (0 to %d)\n",
+        node->tid, node->obno, MAX_ITEMS - 1);
+    fflush(stdout);
+    fprintf(ZGT_Sh->logfile, ":::ERROR: WriteTx by Tx:%ld on object:%ld which is out of range (0 to %d)\n",
+        node->tid, node->obno, MAX_ITEMS - 1);
+    fflush(ZGT_Sh->logfile);
+  }
+  else {
+    // Search the shared Tx list under the TM semaphore 0, and release it before
+    // set_lock so this thread never waits for an object while holding it
+    zgt_p(0);
+    zgt_tx *tx = get_tx(node->tid);
+    zgt_v(0);
+
+    if (tx == NULL){
+      // Errors are printed where they happen; a thread cannot return an error status
+      printf(":::ERROR: WriteTx on Tx:%ld which does not exist\n", node->tid);
+      fflush(stdout);
+      fprintf(ZGT_Sh->logfile, ":::ERROR: WriteTx on Tx:%ld which does not exist\n", node->tid);
+      fflush(ZGT_Sh->logfile);
+    }
+    // X = exclusive lock for a write; set_lock returns 0 when it is granted
+    else if (tx->set_lock(node->tid, tx->sgno, node->obno, node->count, 'X') == 0){
+      // Skip the write if this Tx was aborted while it waited for the lock.
+      // tx is still valid: this Tx's commit/abort waits for this operation to finish.
+      if (tx->status != TR_ABORT){
+        tx->perform_readWrite(node->tid, node->obno, 'X');
+      }
+    }
+  }
+
+  // Let the next operation of this Tx proceed
+  finish_operation(node->tid);
+  pthread_exit(NULL);
 }
 
 //common method to process read/write: just a useful suggestion
@@ -305,9 +387,38 @@ void zgt_tx::print_lock(){
 // based  on the lockmode
 
 void zgt_tx::perform_readWrite(long tid,long obno, char lockmode){
-  
-  //write your code
 
+  // tid = transaction id, obno = object index, lockmode = 'S' (shared, read)
+  // or 'X' (exclusive, write).
+  // Several read-only Txs can hold a shared lock on the same object at once, and a
+  // read changes the value here, so the update and the log line that prints the new
+  // value must not interleave with another thread's update of an object. This mutex
+  // guards only the object values; it is held for the update and the log write and
+  // released before the sleep.
+  static pthread_mutex_t objectValueMutex = PTHREAD_MUTEX_INITIALIZER;
+
+  pthread_mutex_lock(&objectValueMutex);
+  // "The operation in our case is decrementing the object value by 1 and printing a
+  // line in the log if it is a read operation"
+  if (lockmode == 'S'){
+    ZGT_Sh->objarray[obno]->value--;
+    // this->status is the Tx status: TR_ACTIVE='P', TR_WAIT='W', TR_ABORT='A', TR_END='E'
+    fprintf(ZGT_Sh->logfile, "T%ld\t      \tReadTx\t\t%ld:%d:%d\t\tReadLock\tGranted\t\t %c\n",
+        tid, obno, ZGT_Sh->objarray[obno]->value, ZGT_Sh->optime[tid], this->status);
+  }
+  // "For a write operation, we increment the value by one, write this to the log"
+  else {
+    ZGT_Sh->objarray[obno]->value++;
+    fprintf(ZGT_Sh->logfile, "T%ld\t      \tWriteTx\t\t%ld:%d:%d\t\tWriteLock\tGranted\t\t %c\n",
+        tid, obno, ZGT_Sh->objarray[obno]->value, ZGT_Sh->optime[tid], this->status);
+  }
+  // "Do a flush on the logfile write operation to force write it."
+  fflush(ZGT_Sh->logfile);
+  pthread_mutex_unlock(&objectValueMutex);
+
+  // "sleeping for the given time (optime) ... The sleep is to simulate disk
+  // read/write operations"
+  usleep(ZGT_Sh->optime[tid]);
 }
 
 // routine that sets the semno in the Tx when another tx waits on it.

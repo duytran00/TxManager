@@ -134,27 +134,39 @@ if (! inFile.is_open())
        }
   
        else if(tokens[0]=="Write" ||  tokens[0] == "write") {
-	 int k = string2int(c,tokens[1]);
-	 tid = k;
-	 
-	 k = string2int(c,tokens[2]);
-	 obno = k;
-	 
-	 //      cout << "\nwrite: " << tid << " : " << obno;
-	 printf("Write : %ld : %ld\n\n", tid, obno);
-	 if((op= ZGT_Sh->TxWrite(tid,obno, thrNum++))<0)
-	   cout << "\nerro from:" << tokens[0] <<" for TID:" << tid << "\n";
-         // { //error code}
-       }
+          /*
+            1. Must accept (long tid, long obno, int thrNum).
+            2. Must store thread handle in threadid[thrNum] so endTm can pthread_join it.
+            3. Must return 0 on success (any return < 0 triggers the error message).
+          */
+          int k = string2int(c,tokens[1]);
+          tid = k;
+          
+          k = string2int(c,tokens[2]);
+          obno = k;
+          
+          //      cout << "\nwrite: " << tid << " : " << obno;
+          printf("Write : %ld : %ld\n\n", tid, obno);
+          if((op= ZGT_Sh->TxWrite(tid,obno, thrNum++))<0)
+            cout << "\nerro from:" << tokens[0] <<" for TID:" << tid << "\n";
+                // { //error code}
+        }
        else if(tokens[0]=="Abort" || tokens[0] == "abort") {
-	 int k = string2int(c,tokens[1]);
-	 tid = k;
-	 
-	 //     cout << "\nAbort: " << tid;
-	 printf("Abort : %ld\n\n", tid);
-	 if((op= ZGT_Sh->AbortTx(tid, thrNum++))<0)
-	   cout << "\nerro from:" << tokens[0] <<" for TID:" << tid << "\n";
-	 // { //error code}
+        /*
+          1. Inputs: Takes the transaction ID (tid) and thread index counter (thrNum++).
+          2. Thread Array: Must assign the pthread handle into threadid[thrNum] so the
+          end-of-program cleanup function endTm() can join it via
+          pthread_join(threadid[i], NULL).
+          3. Return Value: Must return 0 on success.
+        */
+        int k = string2int(c,tokens[1]);
+        tid = k;
+        
+        //     cout << "\nAbort: " << tid;
+        printf("Abort : %ld\n\n", tid);
+        if((op= ZGT_Sh->AbortTx(tid, thrNum++))<0)
+          cout << "\nerro from:" << tokens[0] <<" for TID:" << tid << "\n";
+        // { //error code}
        }
        
        else if(tokens[0]=="Commit" || tokens[0] == "commit") {
