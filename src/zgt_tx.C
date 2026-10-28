@@ -44,6 +44,7 @@ zgt_tx::zgt_tx( long tid, char Txstatus,char type, pthread_t thrid){
   this->head = NULL;
   this->nextr = NULL;
   this->semno = -1; //init to  an invalid sem value
+  this->waiters = 0;
 }
 
 /* Method used to obtain reference to a transaction node      */
@@ -207,20 +208,19 @@ void *process_read_write(long tid, long obno,  int count, char mode){
 
 void *aborttx(void *arg)
 {
-  struct param *node = (struct param*)arg;// get tid and count  
-
-  //write your code
-
-  pthread_exit(NULL);			// thread exit
+  struct param *node = (struct param*)arg;
+  start_operation(node->tid, node->count);
+  do_commit_abort(node->tid, TR_ABORT);
+  finish_operation(node->tid);
+  pthread_exit(NULL);
 }
 
 void *committx(void *arg)
 {
- 
-    //remove the locks/objects before committing
-  struct param *node = (struct param*)arg;// get tid and count
-
-  //write your code
+  struct param *node = (struct param*)arg;
+  start_operation(node->tid, node->count);
+  do_commit_abort(node->tid, TR_END);
+  finish_operation(node->tid);
   pthread_exit(NULL);			// thread exit
 }
 
@@ -231,25 +231,48 @@ void *committx(void *arg)
 // commit/abort a non-existant tx
 
 void *do_commit_abort(long t, char status){
+  zgt_p(0);
+  zgt_tx *tx = get_tx(t);
+  if (tx == NULL){
+    zgt_v(0);
+    const char *operation = status == TR_ABORT ? "AbortTx" : "CommitTx";
+    fprintf(ZGT_Sh->logfile, ":::ERROR: %s on Tx:%ld which does not exist\n", operation, t);
+    fflush(ZGT_Sh->logfile);
+    printf(":::ERROR: %s on Tx:%ld which does not exist\n", operation, t);
+    fflush(stdout);
+    return(NULL);
+  }
 
-  // write your code
-  return(0);
+  tx->status = status;
+  const char *operation = status == TR_ABORT ? "AbortTx" : "CommitTx";
+  fprintf(ZGT_Sh->logfile, "T%ld\t \t%s\t", t, operation);
+  tx->free_locks();
+
+  for (int waiter = 0; waiter < tx->waiters; ++waiter){
+    zgt_v(tx->tid);
+  }
+
+  if (tx->remove_tx() == 0){
+    delete tx;
+  }
+  zgt_v(0);
+  return(NULL);
 }
 
 int zgt_tx::remove_tx ()
 {
   //remove the transaction from the TM
-  
-  zgt_tx *txptr, *lastr1;
-  lastr1 = ZGT_Sh->lastr;
-  for(txptr = ZGT_Sh->lastr; txptr != NULL; txptr = txptr->nextr){	// scan through list
-	  if (txptr->tid == this->tid){		// if correct node is found          
-		 lastr1->nextr = txptr->nextr;	// update nextr value; done
-		 //delete this;
-         return(0);
-	  }
-	  else lastr1 = txptr->nextr;			// else update prev value
-   }
+
+  zgt_tx **transactionLink = &ZGT_Sh->lastr;
+  while (*transactionLink && (*transactionLink)->tid != this->tid){
+    transactionLink = &(*transactionLink)->nextr;
+  }
+
+  if (*transactionLink){
+    *transactionLink = (*transactionLink)->nextr;
+    return(0);
+  }
+
   fprintf(ZGT_Sh->logfile, "Trying to Remove a Tx:%ld that does not exist\n", this->tid);
   fflush(ZGT_Sh->logfile);
   printf("Trying to Remove a Tx:%ld that does not exist\n", this->tid);
@@ -260,13 +283,83 @@ int zgt_tx::remove_tx ()
 /* this method sets lock on objno1 with lockmode1 for a tx*/
 
 int zgt_tx::set_lock(long tid1, long sgno1, long obno1, int count, char lockmode1){
-  //if the thread has to wait, block the thread on a semaphore from the
-  //sempool in the transaction manager. Set the appropriate parameters in the
-  //transaction list if waiting.
-  //if successful  return(0); else -1
-  
-    //write your code
-  return(0);
+  (void)count;
+
+  if (lockmode1 != 'S' && lockmode1 != 'X'){
+    fprintf(ZGT_Sh->logfile, ":::ERROR: Invalid lock mode %c for Tx:%ld\n", lockmode1, tid1);
+    fflush(ZGT_Sh->logfile);
+    printf(":::ERROR: Invalid lock mode %c for Tx:%ld\n", lockmode1, tid1);
+    fflush(stdout);
+    return(-1);
+  }
+
+  while (true){
+    zgt_p(0);
+    zgt_tx *requester = get_tx(tid1);
+    if (requester == NULL || requester->status == TR_ABORT || requester->status == TR_END){
+      zgt_v(0);
+      return(-1);
+    }
+
+    zgt_hlink *ownLock = ZGT_Ht->findt(tid1, sgno1, obno1);
+    if (ownLock != NULL){
+      requester->status = TR_ACTIVE;
+      requester->obno = -1;
+      requester->lockmode = ' ';
+      zgt_v(0);
+      return(0);
+    }
+
+    zgt_hlink *heldLock = ZGT_Ht->find(sgno1, obno1);
+    if (heldLock == NULL || (lockmode1 == 'S' && heldLock->lockmode == 'S')){
+      if (ZGT_Ht->add(requester, sgno1, obno1, lockmode1) != 0){
+        zgt_v(0);
+        fprintf(ZGT_Sh->logfile, ":::ERROR: Unable to add lock for Tx:%ld on object:%ld\n", tid1, obno1);
+        fflush(ZGT_Sh->logfile);
+        printf(":::ERROR: Unable to add lock for Tx:%ld on object:%ld\n", tid1, obno1);
+        fflush(stdout);
+        return(-1);
+      }
+
+      requester->status = TR_ACTIVE;
+      requester->obno = -1;
+      requester->lockmode = ' ';
+      zgt_v(0);
+      return(0);
+    }
+
+    zgt_tx *holder = get_tx(heldLock->tid);
+    if (holder == NULL){
+      zgt_v(0);
+      fprintf(ZGT_Sh->logfile, ":::ERROR: Lock holder Tx:%ld does not exist\n", heldLock->tid);
+      fflush(ZGT_Sh->logfile);
+      printf(":::ERROR: Lock holder Tx:%ld does not exist\n", heldLock->tid);
+      fflush(stdout);
+      return(-1);
+    }
+
+    requester->status = TR_WAIT;
+    requester->obno = obno1;
+    requester->lockmode = lockmode1;
+    holder->semno = (int)holder->tid;
+    holder->waiters++;
+    int waitSem = holder->semno;
+    zgt_v(0);
+
+    zgt_p(waitSem);
+
+    zgt_p(0);
+    requester = get_tx(tid1);
+    if (requester == NULL || requester->status == TR_ABORT || requester->status == TR_END){
+      zgt_v(0);
+      return(-1);
+    }
+
+    requester->status = TR_ACTIVE;
+    requester->obno = -1;
+    requester->lockmode = ' ';
+    zgt_v(0);
+  }
 }
 
 int zgt_tx::free_locks()
@@ -276,24 +369,31 @@ int zgt_tx::free_locks()
   // that is, remove the objects from the hash table
   // and release all Tx's waiting on this Tx
 
-  zgt_hlink* temp = head;  //first obj of tx
-  
-  for(temp;temp != NULL;temp = temp->nextp){	// SCAN Tx obj list
+  zgt_hlink *temp = head;
+  bool firstLock = true;
+  while(temp != NULL){
+      zgt_hlink *next = temp->nextp;
+      long obno = temp->obno;
+      long tid = temp->tid;
+      char lockmode = temp->lockmode;
 
-      fprintf(ZGT_Sh->logfile, "%ld : %d, ", temp->obno, ZGT_Sh->objarray[temp->obno]->value);
+      if (!firstLock) fprintf(ZGT_Sh->logfile, ", ");
+      fprintf(ZGT_Sh->logfile, "%ld : %d", obno, ZGT_Sh->objarray[obno]->value);
       fflush(ZGT_Sh->logfile);
+      firstLock = false;
       
-      if (ZGT_Ht->remove(this,1,(long)temp->obno) == 1){
-	   printf(":::ERROR:node with tid:%ld and onjno:%ld was not found for deleting", this->tid, temp->obno);		// Release from hash table
-	   fflush(stdout);
+      if (ZGT_Ht->remove(this, 1, obno) == 1){
+        printf(":::ERROR:node with tid:%ld and onjno:%ld was not found for deleting", this->tid, obno);
+        fflush(stdout);
       }
       else {
 #ifdef TX_DEBUG
-	   printf("\n:::Hash node with Tid:%ld, obno:%ld lockmode:%c removed\n",
-                            temp->tid, temp->obno, temp->lockmode);
-	   fflush(stdout);
+        printf("\n:::Hash node with Tid:%ld, obno:%ld lockmode:%c removed\n",
+               tid, obno, lockmode);
+        fflush(stdout);
 #endif
       }
+      temp = next;
     }
   fprintf(ZGT_Sh->logfile, "\n");
   fflush(ZGT_Sh->logfile);

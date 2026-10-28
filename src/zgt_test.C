@@ -44,17 +44,9 @@
 }
 
 
-int string2int(char *s,string str)
- {
- int i =0;
- s = (char *) malloc (sizeof(char) * 12);
- while (str[i]!='\0')
-  {
-    s[i] = str[i];
-    i++;
-  }
-  int k = atoi(s);
-   return(k);
+int string2int(const string& str)
+{
+  return atoi(str.c_str());
 }
 
 int main(int argn, char **argv){
@@ -66,7 +58,6 @@ int main(int argn, char **argv){
   char str[MAX_INPUT_STRING];
   string s;
   int op;
-  char *c;
   int thrNum =0;//2014; count of # threads created!
 
   if (argn < 2) 
@@ -108,7 +99,7 @@ if (! inFile.is_open())
        }
     
        else if(tokens[0]=="BeginTx" || tokens[0] == "begintx"){
-	 tid = string2int(c,tokens[1]);
+   tid = string2int(tokens[1]);
      //Fall 2014[jay]. added following two statements to get Txtype
      //Fall 2014[jay]. Passing the Txtype to get the transaction type.
        strcpy(temp,tokens[2].c_str());
@@ -121,10 +112,10 @@ if (! inFile.is_open())
        }
     
        else if(tokens[0]=="Read" || tokens[0] == "read") {
-	 int k = string2int(c,tokens[1]);
+   int k = string2int(tokens[1]);
 	 tid = k;
 	 
-	 k = string2int(c,tokens[2]);
+   k = string2int(tokens[2]);
 	 obno = k;
 	 //    cout << "\nRead: " << tid << " : " << obno;
 	 printf("Read : %ld : %ld\n\n", tid, obno);
@@ -139,10 +130,10 @@ if (! inFile.is_open())
             2. Must store thread handle in threadid[thrNum] so endTm can pthread_join it.
             3. Must return 0 on success (any return < 0 triggers the error message).
           */
-          int k = string2int(c,tokens[1]);
+          int k = string2int(tokens[1]);
           tid = k;
           
-          k = string2int(c,tokens[2]);
+          k = string2int(tokens[2]);
           obno = k;
           
           //      cout << "\nwrite: " << tid << " : " << obno;
@@ -159,7 +150,7 @@ if (! inFile.is_open())
           pthread_join(threadid[i], NULL).
           3. Return Value: Must return 0 on success.
         */
-        int k = string2int(c,tokens[1]);
+        int k = string2int(tokens[1]);
         tid = k;
         
         //     cout << "\nAbort: " << tid;
@@ -171,7 +162,7 @@ if (! inFile.is_open())
        
        else if(tokens[0]=="Commit" || tokens[0] == "commit") {
        printf("Commit : %ld\n\n", tid);
-	   int k = string2int(c,tokens[1]);
+     int k = string2int(tokens[1]);
 	   tid = k;
 	   if((op= ZGT_Sh->CommitTx(tid, thrNum++))<0)
 	       cout << "\nerro from:" << tokens[0] <<" for TID:" << tid << "\n";
@@ -210,6 +201,7 @@ if (! inFile.is_open())
        inFile.getline (str,MAX_INPUT_STRING);
     }
     cout << endl;   
+      ZGT_Sh->endTm(thrNum);
     inFile.close();
     pthread_exit(NULL);
 }

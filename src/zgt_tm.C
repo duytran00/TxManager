@@ -34,7 +34,7 @@ void zgt_tm::openlog(string lfile)
    this->logfilename[i] = lfile[i];
    i++;
   } 
- logfilename[--i] = '\0';
+ logfilename[i] = '\0';
 #ifdef TM_DEBUG
   printf("\nGiven log file name: %s\n", logfilename);fflush(stdout);
 #endif

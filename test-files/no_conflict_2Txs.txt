@@ -2,7 +2,7 @@
 // 2 transactions (no conflicts)
 // same object accessed
 // multiple times
-Log no_conflicts_2Txs.log
+Log no_conflict_2Txs.log
 BeginTx 1 R
 Read    1 1
 Read    1 2
