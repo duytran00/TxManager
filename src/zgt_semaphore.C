@@ -27,8 +27,6 @@ extern zgt_tm *ZGT_Sh;			// Transaction manager object
              ushort *array;
              } ZGT_arg;
 
-struct sembuf  ZGT_sopbuf, *ZGT_sops= &ZGT_sopbuf;
-
 int zgt_init_sema(int create)
 {
   int semid;  
@@ -72,11 +70,11 @@ void zgt_init_sema_rest(int semid) {
 
 int zgt_p(int sem)
 {
-  int errno;
-  ZGT_sops->sem_num= sem;
-  ZGT_sops->sem_op= -1;
-  ZGT_sops->sem_flg = 0;
-  if (semop(ZGT_Semid, ZGT_sops,1)<0){
+  struct sembuf operation;
+  operation.sem_num = sem;
+  operation.sem_op = -1;
+  operation.sem_flg = 0;
+  if (semop(ZGT_Semid, &operation, 1) < 0){
     printf("could not do a P semaphore operation on sem:%d\n", sem);
     fflush(stdout);
     fprintf(ZGT_Sh->logfile, "could not do a P semaphore operation on sem:%d\n", sem);
@@ -91,10 +89,11 @@ int zgt_p(int sem)
 
 int zgt_v(int sem)
 {
-  ZGT_sops->sem_num= sem;
-  ZGT_sops->sem_op= 1;
-  ZGT_sops->sem_flg = 0;
-  if (semop(ZGT_Semid,ZGT_sops,1)< 0){
+  struct sembuf operation;
+  operation.sem_num = sem;
+  operation.sem_op = 1;
+  operation.sem_flg = 0;
+  if (semop(ZGT_Semid, &operation, 1) < 0){
     printf("could not do a V semaphore operation on sem:%d\n", sem);
     fflush(stdout);
     fprintf(ZGT_Sh->logfile, "could not do a V semaphore operation on sem:%d\n", sem);

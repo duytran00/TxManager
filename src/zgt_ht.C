@@ -92,39 +92,26 @@ int zgt_ht::add ( zgt_tx *tp,long sgno, long obno,  char lockmode )
 
 int zgt_ht::remove ( zgt_tx *tr,long sgno, long obno )
 {
-  zgt_hlink *prevp, *linkp;
-  zgt_hlink *tprev, *tlink;
+  zgt_hlink **bucketLink = &ZGT_Sh->head[hashing(sgno, obno)];
+  while (*bucketLink && !((*bucketLink)->tid == tr->tid &&
+                          (*bucketLink)->obno == obno &&
+                          (*bucketLink)->sgno == sgno)){
+    bucketLink = &(*bucketLink)->next;
+  }
 
-    prevp = linkp = ZGT_Sh->head[hashing(sgno,obno)];
+  if (*bucketLink == NULL) return(1);
 
-  while (linkp){
-      if ((linkp->tid==tr->tid)&&(linkp->obno==obno)&&(linkp->sgno==sgno)) 
-        break;
-      prevp = linkp;
-      linkp = linkp->next;
-    }
+  zgt_hlink *linkp = *bucketLink;
+  zgt_hlink **transactionLink = &tr->head;
+  while (*transactionLink && *transactionLink != linkp){
+    transactionLink = &(*transactionLink)->nextp;
+  }
 
-  if (linkp == NULL) return (1);  // linkp not found
+  if (*transactionLink == NULL) return(1);
 
-    // first remove it off the transaction link
-
-  if (tr->head == linkp) tr->head = linkp->nextp;
-  else {
-	tprev = tlink = tr->head;
-	while ((tlink)&&(tlink!=linkp))
-	  {
-	    if (tlink== linkp) {
-	      tprev->nextp = tlink->nextp;
-	      break;
-	    };
-	    tprev = tlink;
-	    tlink = tlink->nextp;
-	  }
-  };
-
-  if (prevp != linkp) prevp->next = linkp->next;
-  else ZGT_Sh->head[hashing(sgno,obno)] = linkp->next;
-  //  Return successfully
+  *bucketLink = linkp->next;
+  *transactionLink = linkp->nextp;
+  free(linkp);
   return (0);
 };
 

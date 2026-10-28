@@ -45,6 +45,7 @@ class zgt_tx {
   char lockmode;
   char Txtype; //transaction type R = Read-only or W = Read/Write
   int semno;    // Txi uses semaphore i; sem 0 for TM
+  int waiters;
   zgt_hlink *head;           // head of lock table
   zgt_hlink *others_lock(zgt_hlink *, long, long); 
   zgt_tx *nextr;
